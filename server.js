@@ -6,7 +6,6 @@ const { URL } = require('url');
 
 const app = express();
 
-// Full CORS support for PWA / Web MSE
 app.use(cors({
   origin: '*',
   methods: ['GET', 'HEAD', 'POST', 'OPTIONS'],
@@ -15,17 +14,26 @@ app.use(cors({
 }));
 
 app.get('/proxy', (req, res) => {
-  const targetUrl = req.query.url;
-
-  if (!targetUrl) {
+  // Capture everything after "?url=" intact so query parameters like &password= aren't dropped
+  const rawUrlIndex = req.url.indexOf('?url=');
+  if (rawUrlIndex === -1) {
     return res.status(400).json({ error: 'Missing ?url= parameter' });
+  }
+
+  let targetUrl = req.url.substring(rawUrlIndex + 5);
+
+  // If the browser encoded it, decode it
+  try {
+    targetUrl = decodeURIComponent(targetUrl);
+  } catch (e) {
+    // Keep as-is if already raw
   }
 
   let parsedUrl;
   try {
     parsedUrl = new URL(targetUrl);
   } catch (e) {
-    return res.status(400).json({ error: 'Invalid URL format' });
+    return res.status(400).json({ error: 'Invalid URL format', target: targetUrl });
   }
 
   const client = parsedUrl.protocol === 'https:' ? https : http;
@@ -38,7 +46,7 @@ app.get('/proxy', (req, res) => {
     method: 'GET',
     headers: {
       'Host': parsedUrl.host,
-      'User-Agent': 'VLC/3.0.18 LibVLC/3.0.18',
+      'User-Agent': 'IPTVSmartersPro/3.1.5 (Linux; Android 12)',
       'Accept': '*/*',
       'Connection': 'keep-alive',
       'Icy-MetaData': '1'
@@ -50,35 +58,30 @@ app.get('/proxy', (req, res) => {
   }
 
   const proxyReq = client.request(options, (proxyRes) => {
-    // If upstream redirects (301/302), follow it
     if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
       return res.redirect(proxyRes.headers.location);
     }
 
-    // Pass headers
     res.status(proxyRes.statusCode);
     
     Object.keys(proxyRes.headers).forEach((key) => {
       res.setHeader(key, proxyRes.headers[key]);
     });
 
-    // Enforce proper MIME type for MPEG-TS live video
     if (targetUrl.includes('.ts') || targetUrl.includes('/live/') || !targetUrl.includes('.php')) {
       res.setHeader('Content-Type', 'video/mp2t');
     }
 
-    // Direct pipe without buffering to keep memory footprint tiny
     proxyRes.pipe(res);
   });
 
   proxyReq.on('error', (err) => {
     console.error('Proxy Engine Error:', err.message);
     if (!res.headersSent) {
-      res.status(502).json({ error: 'Bad Gateway: Upstream connection refused', details: err.message });
+      res.status(502).json({ error: 'Upstream connection error', details: err.message });
     }
   });
 
-  // Terminate upstream socket if client closes browser tab/player modal
   req.on('close', () => {
     proxyReq.destroy();
   });
@@ -87,7 +90,7 @@ app.get('/proxy', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('oub cima Proxy Engine is Live and Operational');
+  res.send('oub cima Proxy Engine Operational');
 });
 
 const PORT = process.env.PORT || 10000;
